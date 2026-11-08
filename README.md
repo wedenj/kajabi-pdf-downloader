@@ -55,6 +55,20 @@ npm run build
 npm start
 ```
 
+### Debug Mode
+
+Run with `--debug` flag to enable debugging features:
+- Browser window visible (not headless)
+- Screenshot of library page saved to downloads folder
+- HTML source saved for inspection
+- Detailed selector matching logs
+
+```bash
+npm run dev -- --debug
+# or after building:
+node dist/index.js --debug
+```
+
 ### Interactive Prompts
 
 When you run the application, you'll be prompted for:
@@ -183,9 +197,23 @@ If login fails:
 2. Check if the site requires 2FA (not currently supported)
 3. Try running in non-headless mode to see what's happening
 
+### No Module Links Found
+
+If the scanner finds 0 module links:
+1. **Run in debug mode**: `npm run dev -- --debug`
+2. Check the saved screenshot (`downloads/debug-library-page.png`)
+3. Check the saved HTML (`downloads/debug-library-page.html`)
+4. Verify you can see the library content in the browser
+5. The React content may need more time to load
+
+The scanner waits for `networkidle` and tries multiple selector patterns:
+- Links containing `/library/`, `/courses/`, `/module`, `/lesson`, `/content/`
+- Common Kajabi class patterns (`.course-link`, `.lesson-link`)
+- Data attributes (`[data-course]`, `[data-lesson]`)
+
 ### No PDFs Found
 
-If no PDFs are discovered:
+If no PDFs are discovered after finding modules:
 1. Verify you have access to the library content
 2. Check if PDFs are behind additional authentication
 3. The site structure may have changed - check the module link selectors

@@ -27,6 +27,7 @@ class KajabiPDFDownloader {
   private browser: Browser | null = null;
   private page: Page | null = null;
   private downloadsDir: string;
+  private debugMode: boolean;
   private stats: DownloadStats = {
     total: 0,
     successful: 0,
@@ -34,17 +35,22 @@ class KajabiPDFDownloader {
     skipped: 0,
   };
 
-  constructor(downloadsDir: string = './downloads') {
+  constructor(downloadsDir: string = './downloads', debugMode: boolean = false) {
     this.downloadsDir = path.resolve(downloadsDir);
+    this.debugMode = debugMode;
   }
 
   async initialize(): Promise<void> {
     console.log(chalk.blue('🚀 Initializing Kajabi PDF Downloader...\n'));
+    
+    if (this.debugMode) {
+      console.log(chalk.yellow('🐛 Debug mode enabled - browser will be visible\n'));
+    }
 
     await fs.mkdir(this.downloadsDir, { recursive: true });
 
     this.browser = await chromium.launch({
-      headless: false,
+      headless: !this.debugMode,
     });
 
     this.page = await this.browser.newPage();
@@ -123,40 +129,113 @@ class KajabiPDFDownloader {
     const pdfLinks: PDFLink[] = [];
 
     try {
-      await this.page.waitForTimeout(2000);
+      console.log(chalk.gray('Waiting for React content to load...'));
+      
+      await this.page.waitForLoadState('networkidle', { timeout: 30000 });
+      await this.page.waitForTimeout(3000);
 
-      const moduleLinks = await this.page.$$eval(
-        'a[href*="/library/"], a[href*="/courses/"], a[href*="/module"]',
-        (links) =>
-          links
-            .map((link) => ({
-              url: (link as HTMLAnchorElement).href,
-              text: link.textContent?.trim() || '',
-            }))
-            .filter((link) => link.url && link.text)
-      );
+      if (this.debugMode) {
+        const screenshotPath = path.join(this.downloadsDir, 'debug-library-page.png');
+        await this.page.screenshot({ path: screenshotPath, fullPage: true });
+        console.log(chalk.yellow(`📸 Screenshot saved: ${screenshotPath}\n`));
+      }
 
-      console.log(chalk.cyan(`Found ${moduleLinks.length} potential module links\n`));
+      const pageContent = await this.page.content();
+      if (this.debugMode) {
+        const htmlPath = path.join(this.downloadsDir, 'debug-library-page.html');
+        await fs.writeFile(htmlPath, pageContent);
+        console.log(chalk.yellow(`📄 HTML saved: ${htmlPath}\n`));
+      }
 
-      const uniqueUrls = new Set<string>();
-      for (const link of moduleLinks) {
-        if (!uniqueUrls.has(link.url)) {
-          uniqueUrls.add(link.url);
+      const selectors = [
+        'a[href*="/library/"]',
+        'a[href*="/courses/"]',
+        'a[href*="/module"]',
+        'a[href*="lesson"]',
+        'a[href*="content"]',
+        'a.course-link',
+        'a.lesson-link',
+        'a.module-link',
+        'div[class*="course"] a',
+        'div[class*="lesson"] a',
+        'div[class*="module"] a',
+        '[data-course] a',
+        '[data-lesson] a',
+      ];
+
+      console.log(chalk.gray('Trying multiple selector patterns...\n'));
+
+      let allLinks: Array<{ url: string; text: string }> = [];
+
+      for (const selector of selectors) {
+        try {
+          const links = await this.page.$$eval(selector, (elements) =>
+            elements
+              .map((el) => ({
+                url: (el as HTMLAnchorElement).href,
+                text: el.textContent?.trim() || '',
+              }))
+              .filter((link) => link.url && link.text && link.url !== window.location.href)
+          );
+
+          if (links.length > 0 && this.debugMode) {
+            console.log(chalk.gray(`  Selector "${selector}": found ${links.length} links`));
+          }
+
+          allLinks.push(...links);
+        } catch (error) {
         }
       }
 
-      let moduleCount = 0;
-      for (const link of Array.from(uniqueUrls).map((url) =>
-        moduleLinks.find((l) => l.url === url)
-      )) {
-        if (!link) continue;
+      const linksByUrl = new Map<string, { url: string; text: string }>();
+      for (const link of allLinks) {
+        if (!linksByUrl.has(link.url) && this.looksLikeContentLink(link.url)) {
+          linksByUrl.set(link.url, link);
+        }
+      }
 
+      const moduleLinks = Array.from(linksByUrl.values());
+
+      console.log(chalk.cyan(`\nFound ${moduleLinks.length} potential module/content links\n`));
+
+      if (moduleLinks.length === 0) {
+        console.log(chalk.yellow('⚠️  No module links found. Checking all links on page...'));
+        
+        const allPageLinks = await this.page.$$eval('a[href]', (elements) =>
+          elements
+            .map((el) => ({
+              url: (el as HTMLAnchorElement).href,
+              text: el.textContent?.trim() || '',
+            }))
+            .filter((link) => link.url && link.text)
+        );
+
+        console.log(chalk.gray(`Total links on page: ${allPageLinks.length}`));
+        
+        if (this.debugMode && allPageLinks.length > 0) {
+          console.log(chalk.gray('\nSample links:'));
+          allPageLinks.slice(0, 10).forEach((link, i) => {
+            console.log(chalk.gray(`  ${i + 1}. ${link.text} -> ${link.url}`));
+          });
+        }
+
+        for (const link of allPageLinks) {
+          if (this.looksLikeContentLink(link.url)) {
+            moduleLinks.push(link);
+          }
+        }
+        
+        console.log(chalk.cyan(`After filtering: ${moduleLinks.length} content links\n`));
+      }
+
+      let moduleCount = 0;
+      for (const link of moduleLinks) {
         try {
           moduleCount++;
-          console.log(chalk.gray(`[${moduleCount}/${uniqueUrls.size}] Checking: ${link.text}`));
+          console.log(chalk.gray(`[${moduleCount}/${moduleLinks.length}] Checking: ${link.text}`));
 
-          await this.page.goto(link.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-          await this.page.waitForTimeout(1500);
+          await this.page.goto(link.url, { waitUntil: 'networkidle', timeout: 30000 });
+          await this.page.waitForTimeout(2000);
 
           const pagePDFs = await this.findPDFsOnPage(link.text);
           pdfLinks.push(...pagePDFs);
@@ -175,6 +254,21 @@ class KajabiPDFDownloader {
     }
 
     return pdfLinks;
+  }
+
+  private looksLikeContentLink(url: string): boolean {
+    const lowerUrl = url.toLowerCase();
+    return (
+      (lowerUrl.includes('/library/') ||
+        lowerUrl.includes('/courses/') ||
+        lowerUrl.includes('/module') ||
+        lowerUrl.includes('/lesson') ||
+        lowerUrl.includes('/content/') ||
+        lowerUrl.includes('/post/')) &&
+      !lowerUrl.includes('/library#') &&
+      !lowerUrl.endsWith('/library') &&
+      !lowerUrl.endsWith('/library/')
+    );
   }
 
   private isPdfLink(url: string): boolean {
@@ -358,6 +452,12 @@ async function main() {
   console.log(chalk.bold.blue('║   Kajabi PDF Downloader v1.0.0        ║'));
   console.log(chalk.bold.blue('╚════════════════════════════════════════╝\n'));
 
+  const debugMode = process.argv.includes('--debug');
+
+  if (debugMode) {
+    console.log(chalk.yellow('🐛 Debug mode enabled\n'));
+  }
+
   const response = await prompts([
     {
       type: 'text',
@@ -391,7 +491,7 @@ async function main() {
     process.exit(0);
   }
 
-  const downloader = new KajabiPDFDownloader(response.downloadsDir);
+  const downloader = new KajabiPDFDownloader(response.downloadsDir, debugMode);
 
   try {
     await downloader.initialize();
