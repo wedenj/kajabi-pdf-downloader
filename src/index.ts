@@ -342,9 +342,11 @@ class KajabiPDFDownloader {
   async scanLibrary(): Promise<PDFLink[]> {
     if (!this.page) throw new Error('Page not initialized');
 
-    console.log(chalk.blue('📚 Scanning library for PDFs...\n'));
+    console.log(chalk.blue('📚 Scanning library for PDFs (recursive mode)...\n'));
 
     const pdfLinks: PDFLink[] = [];
+    const visitedUrls = new Set<string>();
+    const maxDepth = 3;
 
     try {
       console.log(chalk.gray('Waiting for React content to load...'));
@@ -365,133 +367,125 @@ class KajabiPDFDownloader {
         console.log(chalk.yellow(`📄 HTML saved: ${htmlPath}\n`));
       }
 
-      const selectors = [
-        'a[href*="/library/"]',
-        'a[href*="/courses/"]',
-        'a[href*="/module"]',
-        'a[href*="lesson"]',
-        'a[href*="content"]',
-        'a.course-link',
-        'a.lesson-link',
-        'a.module-link',
-        'div[class*="course"] a',
-        'div[class*="lesson"] a',
-        'div[class*="module"] a',
-        '[data-course] a',
-        '[data-lesson] a',
-      ];
+      const currentUrl = this.page.url();
+      visitedUrls.add(currentUrl);
 
-      console.log(chalk.gray('Trying multiple selector patterns...\n'));
+      let currentDepth = 0;
+      let currentLevel = [currentUrl];
 
-      let allLinks: Array<{ url: string; text: string }> = [];
+      while (currentDepth < maxDepth && currentLevel.length > 0) {
+        console.log(chalk.blue(`\n${'='.repeat(60)}`));
+        console.log(chalk.blue(`📊 Level ${currentDepth + 1} Scan: ${currentLevel.length} page(s) to check`));
+        console.log(chalk.blue('='.repeat(60) + '\n'));
 
-      for (const selector of selectors) {
-        try {
-          const links = await this.page.$$eval(selector, (elements) =>
-            elements
-              .map((el) => ({
-                url: (el as HTMLAnchorElement).href,
-                text: el.textContent?.trim() || '',
-              }))
-              .filter((link) => link.url && link.text && link.url !== window.location.href)
-          );
+        const nextLevel: string[] = [];
 
-          if (links.length > 0 && this.debugMode) {
-            console.log(chalk.gray(`  Selector "${selector}": found ${links.length} links`));
+        for (let i = 0; i < currentLevel.length; i++) {
+          const url = currentLevel[i];
+          
+          if (visitedUrls.has(url)) {
+            if (this.debugMode) {
+              console.log(chalk.gray(`Skipping already visited: ${url}`));
+            }
+            continue;
           }
 
-          allLinks.push(...links);
-        } catch (error) {
-        }
-      }
+          try {
+            console.log(chalk.cyan(`\n[${i + 1}/${currentLevel.length}] Visiting page...`));
+            console.log(chalk.gray(`  URL: ${url}`));
 
-      const linksByUrl = new Map<string, { url: string; text: string }>();
-      for (const link of allLinks) {
-        if (!linksByUrl.has(link.url) && this.looksLikeContentLink(link.url)) {
-          linksByUrl.set(link.url, link);
-        }
-      }
+            await this.page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+            await this.page.waitForTimeout(2000);
+            visitedUrls.add(url);
 
-      const moduleLinks = Array.from(linksByUrl.values());
+            if (this.debugMode) {
+              const screenshot = path.join(this.downloadsDir, `debug-depth${currentDepth + 1}-page${i + 1}.png`);
+              await this.page.screenshot({ path: screenshot });
+              console.log(chalk.gray(`  📸 Screenshot: ${screenshot}`));
+            }
 
-      console.log(chalk.cyan(`\nFound ${moduleLinks.length} potential module/content links\n`));
+            console.log(chalk.gray(`  Scanning for content links...`));
+            const contentLinks = await this.discoverContentLinks();
+            
+            const newLinks = contentLinks.filter((link) => !visitedUrls.has(link));
+            console.log(chalk.gray(`  Found ${contentLinks.length} content links (${newLinks.length} new)`));
 
-      if (moduleLinks.length === 0) {
-        console.log(chalk.yellow('⚠️  No module links found. Checking all links on page...'));
-        
-        const allPageLinks = await this.page.$$eval('a[href]', (elements) =>
-          elements
-            .map((el) => ({
-              url: (el as HTMLAnchorElement).href,
-              text: el.textContent?.trim() || '',
-            }))
-            .filter((link) => link.url && link.text)
-        );
-
-        console.log(chalk.gray(`Total links on page: ${allPageLinks.length}`));
-        
-        if (this.debugMode && allPageLinks.length > 0) {
-          console.log(chalk.gray('\nSample links:'));
-          allPageLinks.slice(0, 10).forEach((link, i) => {
-            console.log(chalk.gray(`  ${i + 1}. ${link.text} -> ${link.url}`));
-          });
-        }
-
-        for (const link of allPageLinks) {
-          if (this.looksLikeContentLink(link.url)) {
-            moduleLinks.push(link);
-          }
-        }
-        
-        console.log(chalk.cyan(`After filtering: ${moduleLinks.length} content links\n`));
-      }
-
-      let moduleCount = 0;
-      for (const link of moduleLinks) {
-        try {
-          moduleCount++;
-          console.log(chalk.cyan(`\n[${moduleCount}/${moduleLinks.length}] ${link.text}`));
-          console.log(chalk.gray(`  URL: ${link.url}`));
-          console.log(chalk.gray(`  Navigating...`));
-
-          await this.page.goto(link.url, { waitUntil: 'networkidle', timeout: 30000 });
-          await this.page.waitForTimeout(2000);
-
-          if (this.debugMode) {
-            const moduleScreenshot = path.join(this.downloadsDir, `debug-module-${moduleCount}.png`);
-            await this.page.screenshot({ path: moduleScreenshot });
-            console.log(chalk.gray(`  📸 Screenshot: ${moduleScreenshot}`));
-          }
-
-          console.log(chalk.gray(`  Looking for PDFs on this page...`));
-
-          const pagePDFs = await this.findPDFsOnPage(link.text, moduleCount);
-          pdfLinks.push(...pagePDFs);
-
-          if (pagePDFs.length > 0) {
-            console.log(chalk.green(`  ✓ Found ${pagePDFs.length} PDF(s)`));
-            pagePDFs.forEach((pdf, i) => {
-              console.log(chalk.green(`    ${i + 1}. ${pdf.title}`));
-              if (this.debugMode) {
-                console.log(chalk.gray(`       ${pdf.url}`));
+            if (newLinks.length > 0 && this.debugMode) {
+              console.log(chalk.gray(`  New links to visit:`));
+              newLinks.slice(0, 5).forEach((link, idx) => {
+                const truncated = link.length > 80 ? link.substring(0, 77) + '...' : link;
+                console.log(chalk.gray(`    ${idx + 1}. ${truncated}`));
+              });
+              if (newLinks.length > 5) {
+                console.log(chalk.gray(`    ... and ${newLinks.length - 5} more`));
               }
-            });
-          } else {
-            console.log(chalk.yellow(`  ✗ No PDFs found on this page`));
+            }
+
+            nextLevel.push(...newLinks);
+
+            console.log(chalk.gray(`  Checking for PDFs on this page...`));
+            const pagePDFs = await this.findPDFsOnPage(`Level ${currentDepth + 1} Page ${i + 1}`, i + 1);
+
+            if (pagePDFs.length > 0) {
+              pdfLinks.push(...pagePDFs);
+              console.log(chalk.green(`  ✓ Found ${pagePDFs.length} PDF(s)!`));
+              pagePDFs.forEach((pdf, idx) => {
+                console.log(chalk.green(`    ${idx + 1}. ${pdf.title}`));
+                if (this.debugMode) {
+                  console.log(chalk.gray(`       ${pdf.url}`));
+                }
+              });
+            } else {
+              console.log(chalk.gray(`  No PDFs on this page`));
+            }
+          } catch (error) {
+            console.log(chalk.red(`  ✗ Error: ${error}`));
           }
-        } catch (error) {
-          console.log(chalk.red(`  ✗ Error: ${error}`));
+        }
+
+        currentLevel = [...new Set(nextLevel)];
+        currentDepth++;
+
+        if (currentLevel.length > 0) {
+          console.log(chalk.cyan(`\n📋 Level ${currentDepth + 1} will have ${currentLevel.length} pages to scan`));
         }
       }
 
       console.log(chalk.green(`\n${'='.repeat(60)}`));
-      console.log(chalk.green(`✓ Scan complete: Visited ${moduleCount} pages, found ${pdfLinks.length} PDFs`));
+      console.log(chalk.green(`✓ Scan complete!`));
+      console.log(chalk.green(`  Visited: ${visitedUrls.size} pages`));
+      console.log(chalk.green(`  Found: ${pdfLinks.length} PDFs`));
+      console.log(chalk.green(`  Max depth reached: ${currentDepth}/${maxDepth}`));
       console.log(chalk.green('='.repeat(60) + '\n'));
     } catch (error) {
       console.error(chalk.red(`Error during library scan: ${error}`));
     }
 
     return pdfLinks;
+  }
+
+  private async discoverContentLinks(): Promise<string[]> {
+    if (!this.page) return [];
+
+    try {
+      const links = await this.page.$$eval('a[href]', (anchors) =>
+        anchors
+          .map((a) => (a as HTMLAnchorElement).href)
+          .filter((href) => href && href.startsWith('http'))
+      );
+
+      const contentLinks: string[] = [];
+      for (const link of links) {
+        if (this.looksLikeContentLink(link)) {
+          contentLinks.push(link);
+        }
+      }
+
+      return [...new Set(contentLinks)];
+    } catch (error) {
+      console.error(chalk.yellow(`Error discovering content links: ${error}`));
+      return [];
+    }
   }
 
   private looksLikeContentLink(url: string): boolean {
