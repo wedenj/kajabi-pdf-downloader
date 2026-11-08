@@ -6,11 +6,18 @@ Automated PDF downloader for Kajabi library sites using Playwright browser autom
 
 - 🔐 **Secure Authentication** - Prompts for credentials at runtime (not stored)
 - 🕷️ **Smart Crawling** - Systematically scans library modules for PDFs
+- 🛡️ **Domain Isolation** - Only follows links within the target Kajabi site (prevents external link following)
+- 🎯 **Intelligent PDF Detection** - Finds PDFs via multiple patterns:
+  - Traditional `.pdf` extensions
+  - Kajabi `-pdf` URL endings
+  - `/downloads/` paths
+  - Embedded PDFs in iframes and objects
 - 📥 **Bulk Download** - Downloads all discovered PDFs with progress tracking
 - 🔄 **Retry Logic** - Automatic retry on failed downloads (up to 3 attempts)
 - 📊 **Progress Tracking** - Real-time status updates and final statistics
-- 🎯 **Organized Output** - Saves PDFs with descriptive, organized filenames
+- 📁 **Organized Output** - Saves PDFs with descriptive, organized filenames
 - ⚡ **Skip Existing** - Automatically skips already downloaded files
+- 🔄 **Progressive Scanning** - Resume from any depth level with cache support
 
 ## Prerequisites
 
@@ -49,6 +56,89 @@ npm run dev
 npm run build
 npm start
 ```
+
+### Command-Line Flags
+
+**Debug Mode (`--debug`)**
+
+Enable debugging features:
+- Browser window visible (not headless)
+- Screenshots saved for each page
+- HTML source saved for inspection
+- Detailed selector matching logs
+
+```bash
+npm run dev -- --debug
+# or after building:
+node dist/index.js --debug
+```
+
+**Max Depth (`--max-depth <number>`)**
+
+Control how deep the scanner recurses through content (default: 3):
+- Level 1: Library page
+- Level 2: Products/categories
+- Level 3: Modules/lessons (where most PDFs are)
+
+```bash
+# Scan deeper to find nested content
+npm run dev -- --max-depth 5
+
+# Combine with debug mode
+npm run dev -- --debug --max-depth 4
+```
+
+If the scanner reports "X more links found at max depth", try increasing `--max-depth` to scan deeper.
+
+**Force Download (`--force`)**
+
+Re-download all PDFs, even if they already exist:
+
+```bash
+# Re-download everything
+npm run dev -- --force
+
+# Re-run with higher depth, only download new PDFs
+npm run dev -- --max-depth 5
+# (skips existing files automatically)
+
+# Force re-download with higher depth
+npm run dev -- --max-depth 5 --force
+```
+
+By default, the app skips files that already exist in the downloads folder. This lets you safely re-run with different depths without re-downloading everything.
+
+**Progressive Depth Scanning (`--start-depth <number>`)**
+
+Scan deeper levels without re-scanning shallow ones:
+
+```bash
+# First: scan levels 1-5
+npm run dev -- --max-depth 5
+
+# Later: scan levels 6-8 only (uses cached URLs from level 5)
+npm run dev -- --start-depth 6 --max-depth 8
+
+# Combine with other flags
+npm run dev -- --start-depth 4 --max-depth 6 --debug
+```
+
+The app saves a cache file (`.scan-cache.json`) with:
+- URLs already visited
+- URLs queued at each depth level
+- Last scan depth
+
+This allows progressive exploration without repeating work.
+
+**No Cache (`--no-cache`)**
+
+Ignore saved cache and start fresh:
+
+```bash
+npm run dev -- --no-cache
+```
+
+Useful if you want to re-scan from scratch or the cache is stale.
 
 ### Interactive Prompts
 
@@ -178,12 +268,32 @@ If login fails:
 2. Check if the site requires 2FA (not currently supported)
 3. Try running in non-headless mode to see what's happening
 
+### No Module Links Found
+
+If the scanner finds 0 module links:
+1. **Run in debug mode**: `npm run dev -- --debug`
+2. Check the saved screenshot (`downloads/debug-library-page.png`)
+3. Check the saved HTML (`downloads/debug-library-page.html`)
+4. Verify you can see the library content in the browser
+5. The React content may need more time to load
+
+The scanner waits for `networkidle` and tries multiple selector patterns:
+- Links containing `/library/`, `/courses/`, `/module`, `/lesson`, `/content/`
+- Common Kajabi class patterns (`.course-link`, `.lesson-link`)
+- Data attributes (`[data-course]`, `[data-lesson]`)
+
 ### No PDFs Found
 
-If no PDFs are discovered:
+If no PDFs are discovered after finding modules:
 1. Verify you have access to the library content
 2. Check if PDFs are behind additional authentication
 3. The site structure may have changed - check the module link selectors
+
+The app detects PDFs using multiple patterns:
+- URLs ending in `.pdf` (e.g., `document.pdf`)
+- Kajabi-style URLs ending in `-pdf` (e.g., `cookbook-pdf`)
+- URLs containing `/downloads/` in the path
+- Embedded PDFs in `<iframe>`, `<embed>`, or `<object>` tags
 
 ### Download Failures
 
