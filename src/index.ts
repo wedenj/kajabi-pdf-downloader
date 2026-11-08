@@ -476,17 +476,46 @@ class KajabiPDFDownloader {
 
   private looksLikeContentLink(url: string): boolean {
     const lowerUrl = url.toLowerCase();
-    return (
-      (lowerUrl.includes('/library/') ||
-        lowerUrl.includes('/courses/') ||
-        lowerUrl.includes('/module') ||
-        lowerUrl.includes('/lesson') ||
-        lowerUrl.includes('/content/') ||
-        lowerUrl.includes('/post/')) &&
-      !lowerUrl.includes('/library#') &&
-      !lowerUrl.endsWith('/library') &&
-      !lowerUrl.endsWith('/library/')
-    );
+    
+    const excludePatterns = [
+      '/library#',
+      '/home',
+      '/settings',
+      '/logout',
+      '/sign_out',
+      '/store',
+      '/cart',
+      '/checkout',
+    ];
+    
+    for (const pattern of excludePatterns) {
+      if (lowerUrl.includes(pattern)) {
+        return false;
+      }
+    }
+    
+    if (lowerUrl.endsWith('/library') || lowerUrl.endsWith('/library/')) {
+      return false;
+    }
+    
+    const contentPatterns = [
+      '/library/',
+      '/courses/',
+      '/products/',
+      '/posts/',
+      '/categories/',
+      '/module',
+      '/lesson',
+      '/content/',
+    ];
+    
+    for (const pattern of contentPatterns) {
+      if (lowerUrl.includes(pattern)) {
+        return true;
+      }
+    }
+    
+    return false;
   }
 
   private isPdfLink(url: string): boolean {
