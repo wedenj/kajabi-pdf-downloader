@@ -6,6 +6,7 @@ Automated PDF downloader for Kajabi library sites using Playwright browser autom
 
 - 🔐 **Secure Authentication** - Prompts for credentials at runtime (not stored)
 - 🕷️ **Smart Crawling** - Systematically scans library modules for PDFs
+- 🛡️ **Domain Isolation** - Only follows links within the target Kajabi site (prevents external link following)
 - 🎯 **Intelligent PDF Detection** - Finds PDFs via multiple patterns:
   - Traditional `.pdf` extensions
   - Kajabi `-pdf` URL endings
@@ -16,6 +17,7 @@ Automated PDF downloader for Kajabi library sites using Playwright browser autom
 - 📊 **Progress Tracking** - Real-time status updates and final statistics
 - 📁 **Organized Output** - Saves PDFs with descriptive, organized filenames
 - ⚡ **Skip Existing** - Automatically skips already downloaded files
+- 🔄 **Progressive Scanning** - Resume from any depth level with cache support
 
 ## Prerequisites
 

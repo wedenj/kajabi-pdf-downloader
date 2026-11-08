@@ -40,6 +40,7 @@ class KajabiPDFDownloader {
   private forceDownload: boolean;
   private useCache: boolean;
   private cacheFile: string;
+  private baseDomain: string = '';
   private stats: DownloadStats = {
     total: 0,
     successful: 0,
@@ -85,7 +86,10 @@ class KajabiPDFDownloader {
     if (!this.page) throw new Error('Page not initialized');
 
     try {
-      const baseUrl = new URL(libraryUrl).origin;
+      const libraryUrlObj = new URL(libraryUrl);
+      this.baseDomain = libraryUrlObj.hostname;
+      
+      const baseUrl = libraryUrlObj.origin;
       const loginUrl = `${baseUrl}/login`;
 
       if (this.debugMode) {
@@ -537,10 +541,30 @@ class KajabiPDFDownloader {
       );
 
       const contentLinks: string[] = [];
+      let externalLinksSkipped = 0;
+
       for (const link of links) {
-        if (this.looksLikeContentLink(link)) {
-          contentLinks.push(link);
+        try {
+          const url = new URL(link);
+          
+          if (url.hostname !== this.baseDomain) {
+            externalLinksSkipped++;
+            if (this.debugMode && externalLinksSkipped <= 5) {
+              console.log(chalk.gray(`  ⏭️  Skipping external link: ${link}`));
+            }
+            continue;
+          }
+
+          if (this.looksLikeContentLink(link)) {
+            contentLinks.push(link);
+          }
+        } catch (error) {
+          // Invalid URL, skip
         }
+      }
+
+      if (externalLinksSkipped > 0 && this.debugMode) {
+        console.log(chalk.gray(`  ⏭️  Total external links skipped: ${externalLinksSkipped}`));
       }
 
       return [...new Set(contentLinks)];
