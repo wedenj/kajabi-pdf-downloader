@@ -55,11 +55,13 @@ npm run build
 npm start
 ```
 
-### Debug Mode
+### Command-Line Flags
 
-Run with `--debug` flag to enable debugging features:
+**Debug Mode (`--debug`)**
+
+Enable debugging features:
 - Browser window visible (not headless)
-- Screenshot of library page saved to downloads folder
+- Screenshots saved for each page
 - HTML source saved for inspection
 - Detailed selector matching logs
 
@@ -68,6 +70,23 @@ npm run dev -- --debug
 # or after building:
 node dist/index.js --debug
 ```
+
+**Max Depth (`--max-depth <number>`)**
+
+Control how deep the scanner recurses through content (default: 3):
+- Level 1: Library page
+- Level 2: Products/categories
+- Level 3: Modules/lessons (where most PDFs are)
+
+```bash
+# Scan deeper to find nested content
+npm run dev -- --max-depth 5
+
+# Combine with debug mode
+npm run dev -- --debug --max-depth 4
+```
+
+If the scanner reports "X more links found at max depth", try increasing `--max-depth` to scan deeper.
 
 ### Interactive Prompts
 

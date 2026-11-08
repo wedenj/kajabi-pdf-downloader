@@ -28,6 +28,7 @@ class KajabiPDFDownloader {
   private page: Page | null = null;
   private downloadsDir: string;
   private debugMode: boolean;
+  private maxDepth: number;
   private stats: DownloadStats = {
     total: 0,
     successful: 0,
@@ -35,9 +36,10 @@ class KajabiPDFDownloader {
     skipped: 0,
   };
 
-  constructor(downloadsDir: string = './downloads', debugMode: boolean = false) {
+  constructor(downloadsDir: string = './downloads', debugMode: boolean = false, maxDepth: number = 3) {
     this.downloadsDir = path.resolve(downloadsDir);
     this.debugMode = debugMode;
+    this.maxDepth = maxDepth;
   }
 
   async initialize(): Promise<void> {
@@ -343,11 +345,10 @@ class KajabiPDFDownloader {
   async scanLibrary(): Promise<PDFLink[]> {
     if (!this.page) throw new Error('Page not initialized');
 
-    console.log(chalk.blue('📚 Scanning library for PDFs (recursive mode)...\n'));
+    console.log(chalk.blue(`📚 Scanning library for PDFs (max depth: ${this.maxDepth})...\n`));
 
     const pdfLinks: PDFLink[] = [];
     const visitedUrls = new Set<string>();
-    const maxDepth = 3;
 
     try {
       console.log(chalk.gray('Waiting for React content to load...'));
@@ -373,7 +374,7 @@ class KajabiPDFDownloader {
       let currentDepth = 0;
       let currentLevel = [currentUrl];
 
-      while (currentDepth < maxDepth && currentLevel.length > 0) {
+      while (currentDepth < this.maxDepth && currentLevel.length > 0) {
         console.log(chalk.blue(`\n${'='.repeat(60)}`));
         console.log(chalk.blue(`📊 Level ${currentDepth + 1} Scan: ${currentLevel.length} page(s) to check`));
         console.log(chalk.blue('='.repeat(60) + '\n'));
@@ -452,11 +453,17 @@ class KajabiPDFDownloader {
         }
       }
 
+      const depthReached = currentLevel.length > 0 && currentDepth >= this.maxDepth;
+      
       console.log(chalk.green(`\n${'='.repeat(60)}`));
       console.log(chalk.green(`✓ Scan complete!`));
       console.log(chalk.green(`  Visited: ${visitedUrls.size} pages`));
       console.log(chalk.green(`  Found: ${pdfLinks.length} PDFs`));
-      console.log(chalk.green(`  Max depth reached: ${currentDepth}/${maxDepth}`));
+      console.log(chalk.green(`  Depth: ${currentDepth}/${this.maxDepth} ${depthReached ? '(max reached)' : '(stopped early)'}`));
+      if (depthReached && currentLevel.length > 0) {
+        console.log(chalk.yellow(`  ⚠️  ${currentLevel.length} more links were found at max depth`));
+        console.log(chalk.yellow(`  ⚠️  Try --max-depth ${this.maxDepth + 1} to scan deeper`));
+      }
       console.log(chalk.green('='.repeat(60) + '\n'));
     } catch (error) {
       console.error(chalk.red(`Error during library scan: ${error}`));
@@ -762,10 +769,23 @@ async function main() {
   console.log(chalk.bold.blue('╚════════════════════════════════════════╝\n'));
 
   const debugMode = process.argv.includes('--debug');
-
-  if (debugMode) {
-    console.log(chalk.yellow('🐛 Debug mode enabled\n'));
+  
+  let maxDepth = 3;
+  const maxDepthIndex = process.argv.indexOf('--max-depth');
+  if (maxDepthIndex !== -1 && process.argv[maxDepthIndex + 1]) {
+    const parsedDepth = parseInt(process.argv[maxDepthIndex + 1], 10);
+    if (!isNaN(parsedDepth) && parsedDepth > 0) {
+      maxDepth = parsedDepth;
+    } else {
+      console.log(chalk.red('❌ Invalid --max-depth value. Using default: 3\n'));
+    }
   }
+
+  console.log(chalk.gray('Configuration:'));
+  if (debugMode) {
+    console.log(chalk.yellow('  🐛 Debug mode: enabled'));
+  }
+  console.log(chalk.gray(`  📊 Max scan depth: ${maxDepth} levels\n`));
 
   const response = await prompts([
     {
@@ -800,7 +820,7 @@ async function main() {
     process.exit(0);
   }
 
-  const downloader = new KajabiPDFDownloader(response.downloadsDir, debugMode);
+  const downloader = new KajabiPDFDownloader(response.downloadsDir, debugMode, maxDepth);
 
   try {
     await downloader.initialize();
