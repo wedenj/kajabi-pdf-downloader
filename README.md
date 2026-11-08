@@ -106,6 +106,38 @@ npm run dev -- --max-depth 5 --force
 
 By default, the app skips files that already exist in the downloads folder. This lets you safely re-run with different depths without re-downloading everything.
 
+**Progressive Depth Scanning (`--start-depth <number>`)**
+
+Scan deeper levels without re-scanning shallow ones:
+
+```bash
+# First: scan levels 1-5
+npm run dev -- --max-depth 5
+
+# Later: scan levels 6-8 only (uses cached URLs from level 5)
+npm run dev -- --start-depth 6 --max-depth 8
+
+# Combine with other flags
+npm run dev -- --start-depth 4 --max-depth 6 --debug
+```
+
+The app saves a cache file (`.scan-cache.json`) with:
+- URLs already visited
+- URLs queued at each depth level
+- Last scan depth
+
+This allows progressive exploration without repeating work.
+
+**No Cache (`--no-cache`)**
+
+Ignore saved cache and start fresh:
+
+```bash
+npm run dev -- --no-cache
+```
+
+Useful if you want to re-scan from scratch or the cache is stale.
+
 ### Interactive Prompts
 
 When you run the application, you'll be prompted for:

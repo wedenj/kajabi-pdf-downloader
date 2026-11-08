@@ -23,13 +23,23 @@ interface PDFLink {
   moduleName: string;
 }
 
+interface ScanCache {
+  visitedUrls: string[];
+  queuedByDepth: { [depth: number]: string[] };
+  lastScanDepth: number;
+  timestamp: number;
+}
+
 class KajabiPDFDownloader {
   private browser: Browser | null = null;
   private page: Page | null = null;
   private downloadsDir: string;
   private debugMode: boolean;
   private maxDepth: number;
+  private startDepth: number;
   private forceDownload: boolean;
+  private useCache: boolean;
+  private cacheFile: string;
   private stats: DownloadStats = {
     total: 0,
     successful: 0,
@@ -37,11 +47,21 @@ class KajabiPDFDownloader {
     skipped: 0,
   };
 
-  constructor(downloadsDir: string = './downloads', debugMode: boolean = false, maxDepth: number = 3, forceDownload: boolean = false) {
+  constructor(
+    downloadsDir: string = './downloads',
+    debugMode: boolean = false,
+    maxDepth: number = 3,
+    startDepth: number = 1,
+    forceDownload: boolean = false,
+    useCache: boolean = true
+  ) {
     this.downloadsDir = path.resolve(downloadsDir);
     this.debugMode = debugMode;
     this.maxDepth = maxDepth;
+    this.startDepth = startDepth;
     this.forceDownload = forceDownload;
+    this.useCache = useCache;
+    this.cacheFile = path.join(this.downloadsDir, '.scan-cache.json');
   }
 
   async initialize(): Promise<void> {
@@ -347,34 +367,63 @@ class KajabiPDFDownloader {
   async scanLibrary(): Promise<PDFLink[]> {
     if (!this.page) throw new Error('Page not initialized');
 
-    console.log(chalk.blue(`📚 Scanning library for PDFs (max depth: ${this.maxDepth})...\n`));
+    const depthRange = this.startDepth === this.maxDepth 
+      ? `depth ${this.maxDepth}` 
+      : `depths ${this.startDepth}-${this.maxDepth}`;
+    console.log(chalk.blue(`📚 Scanning library for PDFs (${depthRange})...\n`));
 
     const pdfLinks: PDFLink[] = [];
     const visitedUrls = new Set<string>();
+    const queuedByDepth: { [depth: number]: string[] } = {};
+
+    const cache = await this.loadCache();
+    
+    if (cache && this.startDepth > 1) {
+      for (const url of cache.visitedUrls) {
+        visitedUrls.add(url);
+      }
+      
+      console.log(chalk.cyan(`📂 Resuming from cache (${cache.visitedUrls.length} URLs already visited)\n`));
+      
+      if (cache.queuedByDepth[this.startDepth - 1]) {
+        console.log(chalk.cyan(`📋 Starting with ${cache.queuedByDepth[this.startDepth - 1].length} URLs from depth ${this.startDepth - 1}\n`));
+      }
+    }
 
     try {
-      console.log(chalk.gray('Waiting for React content to load...'));
-      
-      await this.page.waitForLoadState('networkidle', { timeout: 30000 });
-      await this.page.waitForTimeout(3000);
-
-      if (this.debugMode) {
-        const screenshotPath = path.join(this.downloadsDir, 'debug-library-page.png');
-        await this.page.screenshot({ path: screenshotPath, fullPage: true });
-        console.log(chalk.yellow(`📸 Screenshot saved: ${screenshotPath}\n`));
-      }
-
-      const pageContent = await this.page.content();
-      if (this.debugMode) {
-        const htmlPath = path.join(this.downloadsDir, 'debug-library-page.html');
-        await fs.writeFile(htmlPath, pageContent);
-        console.log(chalk.yellow(`📄 HTML saved: ${htmlPath}\n`));
-      }
-
       const currentUrl = this.page.url();
+      
+      let currentDepth = this.startDepth - 1;
+      let currentLevel: string[];
 
-      let currentDepth = 0;
-      let currentLevel = [currentUrl];
+      if (cache && this.startDepth > 1 && cache.queuedByDepth[this.startDepth - 1]) {
+        currentLevel = cache.queuedByDepth[this.startDepth - 1];
+        console.log(chalk.gray(`Using cached URLs from depth ${this.startDepth - 1} to start depth ${this.startDepth}`));
+      } else if (this.startDepth === 1) {
+        console.log(chalk.gray('Waiting for React content to load...'));
+        
+        await this.page.waitForLoadState('networkidle', { timeout: 30000 });
+        await this.page.waitForTimeout(3000);
+
+        if (this.debugMode) {
+          const screenshotPath = path.join(this.downloadsDir, 'debug-library-page.png');
+          await this.page.screenshot({ path: screenshotPath, fullPage: true });
+          console.log(chalk.yellow(`📸 Screenshot saved: ${screenshotPath}\n`));
+        }
+
+        const pageContent = await this.page.content();
+        if (this.debugMode) {
+          const htmlPath = path.join(this.downloadsDir, 'debug-library-page.html');
+          await fs.writeFile(htmlPath, pageContent);
+          console.log(chalk.yellow(`📄 HTML saved: ${htmlPath}\n`));
+        }
+        
+        currentLevel = [currentUrl];
+      } else {
+        console.log(chalk.red(`\n❌ Error: No cached URLs for depth ${this.startDepth - 1}`));
+        console.log(chalk.yellow(`   Run with --start-depth 1 --max-depth ${this.startDepth - 1} first\n`));
+        return pdfLinks;
+      }
 
       while (currentDepth < this.maxDepth && currentLevel.length > 0) {
         console.log(chalk.blue(`\n${'='.repeat(60)}`));
@@ -448,12 +497,15 @@ class KajabiPDFDownloader {
         }
 
         currentLevel = [...new Set(nextLevel)];
+        queuedByDepth[currentDepth + 1] = currentLevel;
         currentDepth++;
 
         if (currentLevel.length > 0) {
           console.log(chalk.cyan(`\n📋 Level ${currentDepth + 1} will have ${currentLevel.length} pages to scan`));
         }
       }
+
+      await this.saveCache(visitedUrls, queuedByDepth, currentDepth);
 
       const depthReached = currentLevel.length > 0 && currentDepth >= this.maxDepth;
       
@@ -770,6 +822,52 @@ class KajabiPDFDownloader {
       await this.browser.close();
     }
   }
+
+  private async loadCache(): Promise<ScanCache | null> {
+    if (!this.useCache) return null;
+
+    try {
+      const cacheData = await fs.readFile(this.cacheFile, 'utf-8');
+      const cache: ScanCache = JSON.parse(cacheData);
+      
+      if (this.debugMode) {
+        console.log(chalk.gray(`📂 Loaded cache from ${this.cacheFile}`));
+        console.log(chalk.gray(`   Visited URLs: ${cache.visitedUrls.length}`));
+        console.log(chalk.gray(`   Last scan depth: ${cache.lastScanDepth}`));
+        const depths = Object.keys(cache.queuedByDepth);
+        if (depths.length > 0) {
+          console.log(chalk.gray(`   Queued depths: ${depths.join(', ')}`));
+        }
+      }
+      
+      return cache;
+    } catch (error) {
+      if (this.debugMode) {
+        console.log(chalk.gray('📂 No cache found, starting fresh'));
+      }
+      return null;
+    }
+  }
+
+  private async saveCache(visitedUrls: Set<string>, queuedByDepth: { [depth: number]: string[] }, lastDepth: number): Promise<void> {
+    if (!this.useCache) return;
+
+    const cache: ScanCache = {
+      visitedUrls: Array.from(visitedUrls),
+      queuedByDepth,
+      lastScanDepth: lastDepth,
+      timestamp: Date.now(),
+    };
+
+    try {
+      await fs.writeFile(this.cacheFile, JSON.stringify(cache, null, 2), 'utf-8');
+      if (this.debugMode) {
+        console.log(chalk.gray(`\n💾 Saved cache to ${this.cacheFile}`));
+      }
+    } catch (error) {
+      console.error(chalk.yellow(`⚠️  Failed to save cache: ${error}`));
+    }
+  }
 }
 
 async function main() {
@@ -780,6 +878,7 @@ async function main() {
 
   const debugMode = process.argv.includes('--debug');
   const forceDownload = process.argv.includes('--force');
+  const useCache = !process.argv.includes('--no-cache');
   
   let maxDepth = 3;
   const maxDepthIndex = process.argv.indexOf('--max-depth');
@@ -792,13 +891,37 @@ async function main() {
     }
   }
 
+  let startDepth = 1;
+  const startDepthIndex = process.argv.indexOf('--start-depth');
+  if (startDepthIndex !== -1 && process.argv[startDepthIndex + 1]) {
+    const parsedDepth = parseInt(process.argv[startDepthIndex + 1], 10);
+    if (!isNaN(parsedDepth) && parsedDepth > 0) {
+      startDepth = parsedDepth;
+    } else {
+      console.log(chalk.red('❌ Invalid --start-depth value. Using default: 1\n'));
+    }
+  }
+
+  if (startDepth > maxDepth) {
+    console.log(chalk.red(`❌ Error: --start-depth (${startDepth}) cannot be greater than --max-depth (${maxDepth})\n`));
+    process.exit(1);
+  }
+
   console.log(chalk.gray('Configuration:'));
   if (debugMode) {
     console.log(chalk.yellow('  🐛 Debug mode: enabled'));
   }
-  console.log(chalk.gray(`  📊 Max scan depth: ${maxDepth} levels`));
+  const depthRange = startDepth === maxDepth 
+    ? `${maxDepth}` 
+    : startDepth === 1 
+      ? `1-${maxDepth}` 
+      : `${startDepth}-${maxDepth}`;
+  console.log(chalk.gray(`  📊 Scan depth: ${depthRange} levels`));
   if (forceDownload) {
     console.log(chalk.yellow('  🔄 Force download: enabled (will re-download existing files)'));
+  }
+  if (!useCache) {
+    console.log(chalk.yellow('  🚫 Cache disabled: starting fresh'));
   }
   console.log('');
 
@@ -835,7 +958,7 @@ async function main() {
     process.exit(0);
   }
 
-  const downloader = new KajabiPDFDownloader(response.downloadsDir, debugMode, maxDepth, forceDownload);
+  const downloader = new KajabiPDFDownloader(response.downloadsDir, debugMode, maxDepth, startDepth, forceDownload, useCache);
 
   try {
     await downloader.initialize();
