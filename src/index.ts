@@ -72,13 +72,34 @@ class KajabiPDFDownloader {
       console.log(chalk.blue('🔐 Navigating to login page...'));
       await this.page.goto(loginUrl, { waitUntil: 'networkidle', timeout: 30000 });
 
+      console.log(chalk.gray('⏳ Waiting for React to render login form...'));
+      
+      await this.page.waitForLoadState('networkidle', { timeout: 15000 });
+      
+      try {
+        await this.page.waitForSelector('input[type="password"]', { timeout: 10000, state: 'visible' });
+        console.log(chalk.gray('✓ Password field detected, waiting for full form...'));
+      } catch (error) {
+        console.log(chalk.yellow('⚠️  Password field not found yet, continuing...'));
+      }
+      
+      await this.page.waitForTimeout(2000);
+
       if (this.debugMode) {
-        const loginScreenshot = path.join(this.downloadsDir, 'debug-login-page.png');
+        const html = await this.page.content();
+        console.log(chalk.gray(`📄 Page content length: ${html.length} characters`));
+        
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const htmlPath = path.join(this.downloadsDir, `debug-login-${timestamp}.html`);
+        await fs.writeFile(htmlPath, html);
+        console.log(chalk.gray(`📄 Login HTML saved: ${htmlPath}`));
+        
+        const loginScreenshot = path.join(this.downloadsDir, `debug-login-${timestamp}.png`);
         await this.page.screenshot({ path: loginScreenshot });
         console.log(chalk.gray(`📸 Login page screenshot: ${loginScreenshot}\n`));
       }
 
-      console.log(chalk.blue('🔑 Looking for login form...'));
+      console.log(chalk.blue('🔑 Looking for login form fields...'));
 
       const emailSelectors = [
         'input[type="email"]',
@@ -101,16 +122,29 @@ class KajabiPDFDownloader {
       let emailInput = null;
       let passwordInput = null;
 
+      if (this.debugMode) {
+        console.log(chalk.gray('\n  Trying email selectors:'));
+      }
+
       for (const selector of emailSelectors) {
         try {
           await this.page.waitForSelector(selector, { timeout: 2000, state: 'visible' });
           emailInput = selector;
           if (this.debugMode) {
+            console.log(chalk.green(`    ✓ ${selector} - FOUND`));
+          } else {
             console.log(chalk.gray(`  Found email field: ${selector}`));
           }
           break;
         } catch (error) {
+          if (this.debugMode) {
+            console.log(chalk.gray(`    ✗ ${selector} - not found`));
+          }
         }
+      }
+
+      if (this.debugMode) {
+        console.log(chalk.gray('\n  Trying password selectors:'));
       }
 
       for (const selector of passwordSelectors) {
@@ -118,21 +152,43 @@ class KajabiPDFDownloader {
           await this.page.waitForSelector(selector, { timeout: 2000, state: 'visible' });
           passwordInput = selector;
           if (this.debugMode) {
+            console.log(chalk.green(`    ✓ ${selector} - FOUND`));
+          } else {
             console.log(chalk.gray(`  Found password field: ${selector}`));
           }
           break;
         } catch (error) {
+          if (this.debugMode) {
+            console.log(chalk.gray(`    ✗ ${selector} - not found`));
+          }
         }
       }
 
-      if (!emailInput || !passwordInput) {
-        console.error(chalk.red('✗ Could not find login form fields'));
+      const missingFields = [];
+      if (!emailInput) missingFields.push('email');
+      if (!passwordInput) missingFields.push('password');
+
+      if (missingFields.length > 0) {
+        console.error(chalk.red(`\n✗ Could not find login form field(s): ${missingFields.join(', ')}`));
+        
         if (this.debugMode) {
-          const html = await this.page.content();
-          const htmlPath = path.join(this.downloadsDir, 'debug-login-page.html');
-          await fs.writeFile(htmlPath, html);
-          console.log(chalk.gray(`📄 Login HTML saved: ${htmlPath}`));
+          console.log(chalk.yellow('\n  Attempting to find ANY input fields on page:'));
+          const allInputs = await this.page.$$eval('input', (inputs) =>
+            inputs.map((input) => ({
+              type: input.getAttribute('type'),
+              name: input.getAttribute('name'),
+              id: input.getAttribute('id'),
+              placeholder: input.getAttribute('placeholder'),
+              visible: input.offsetParent !== null,
+            }))
+          );
+          
+          console.log(chalk.gray(`  Found ${allInputs.length} total input elements:`));
+          allInputs.forEach((input, i) => {
+            console.log(chalk.gray(`    ${i + 1}. type="${input.type}" name="${input.name}" id="${input.id}" placeholder="${input.placeholder}" visible=${input.visible}`));
+          });
         }
+        
         return false;
       }
 
