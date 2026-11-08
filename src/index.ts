@@ -61,37 +61,155 @@ class KajabiPDFDownloader {
     if (!this.page) throw new Error('Page not initialized');
 
     try {
-      console.log(chalk.blue('🔐 Navigating to library...'));
-      await this.page.goto(libraryUrl, { waitUntil: 'networkidle' });
+      const baseUrl = new URL(libraryUrl).origin;
+      const loginUrl = `${baseUrl}/login`;
 
-      const isLoggedIn = await this.checkIfLoggedIn();
-      if (isLoggedIn) {
-        console.log(chalk.green('✓ Already logged in\n'));
-        return true;
+      if (this.debugMode) {
+        console.log(chalk.gray(`Library URL: ${libraryUrl}`));
+        console.log(chalk.gray(`Login URL: ${loginUrl}\n`));
       }
 
-      console.log(chalk.blue('🔑 Logging in...'));
+      console.log(chalk.blue('🔐 Navigating to login page...'));
+      await this.page.goto(loginUrl, { waitUntil: 'networkidle', timeout: 30000 });
 
-      await this.page.waitForSelector('input[type="email"], input[name="email"], input[id*="email"]', {
-        timeout: 10000,
-      });
+      if (this.debugMode) {
+        const loginScreenshot = path.join(this.downloadsDir, 'debug-login-page.png');
+        await this.page.screenshot({ path: loginScreenshot });
+        console.log(chalk.gray(`📸 Login page screenshot: ${loginScreenshot}\n`));
+      }
 
-      await this.page.fill('input[type="email"], input[name="email"], input[id*="email"]', email);
-      await this.page.fill('input[type="password"], input[name="password"], input[id*="password"]', password);
+      console.log(chalk.blue('🔑 Looking for login form...'));
 
-      await Promise.all([
-        this.page.click('button[type="submit"], input[type="submit"], button:has-text("Sign in"), button:has-text("Log in")'),
-        this.page.waitForNavigation({ waitUntil: 'networkidle', timeout: 30000 }),
-      ]);
+      const emailSelectors = [
+        'input[type="email"]',
+        'input[name="email"]',
+        'input[id="email"]',
+        'input[placeholder*="email" i]',
+        '#user_email',
+        '#email',
+      ];
+
+      const passwordSelectors = [
+        'input[type="password"]',
+        'input[name="password"]',
+        'input[id="password"]',
+        'input[placeholder*="password" i]',
+        '#user_password',
+        '#password',
+      ];
+
+      let emailInput = null;
+      let passwordInput = null;
+
+      for (const selector of emailSelectors) {
+        try {
+          await this.page.waitForSelector(selector, { timeout: 2000, state: 'visible' });
+          emailInput = selector;
+          if (this.debugMode) {
+            console.log(chalk.gray(`  Found email field: ${selector}`));
+          }
+          break;
+        } catch (error) {
+        }
+      }
+
+      for (const selector of passwordSelectors) {
+        try {
+          await this.page.waitForSelector(selector, { timeout: 2000, state: 'visible' });
+          passwordInput = selector;
+          if (this.debugMode) {
+            console.log(chalk.gray(`  Found password field: ${selector}`));
+          }
+          break;
+        } catch (error) {
+        }
+      }
+
+      if (!emailInput || !passwordInput) {
+        console.error(chalk.red('✗ Could not find login form fields'));
+        if (this.debugMode) {
+          const html = await this.page.content();
+          const htmlPath = path.join(this.downloadsDir, 'debug-login-page.html');
+          await fs.writeFile(htmlPath, html);
+          console.log(chalk.gray(`📄 Login HTML saved: ${htmlPath}`));
+        }
+        return false;
+      }
+
+      console.log(chalk.blue('📝 Filling in credentials...'));
+      await this.page.fill(emailInput, email);
+      await this.page.fill(passwordInput, password);
+
+      if (this.debugMode) {
+        console.log(chalk.gray('  Email and password filled'));
+      }
+
+      console.log(chalk.blue('🚀 Submitting login form...'));
+
+      const submitSelectors = [
+        'button[type="submit"]',
+        'input[type="submit"]',
+        'button:has-text("Log in")',
+        'button:has-text("Sign in")',
+        'button:has-text("Login")',
+        'button:has-text("Sign In")',
+        'button:has-text("Log In")',
+        'input[value*="Log" i]',
+        'input[value*="Sign" i]',
+      ];
+
+      let submitButton = null;
+      for (const selector of submitSelectors) {
+        const button = await this.page.$(selector);
+        if (button && (await button.isVisible())) {
+          submitButton = selector;
+          if (this.debugMode) {
+            console.log(chalk.gray(`  Found submit button: ${selector}`));
+          }
+          break;
+        }
+      }
+
+      if (!submitButton) {
+        console.log(chalk.yellow('⚠️  No submit button found, trying form submit...'));
+        await this.page.evaluate(() => {
+          const form = document.querySelector('form');
+          if (form) form.submit();
+        });
+      } else {
+        await this.page.click(submitButton);
+      }
+
+      console.log(chalk.gray('Waiting for navigation after login...'));
+      
+      try {
+        await this.page.waitForNavigation({ waitUntil: 'networkidle', timeout: 30000 });
+      } catch (error) {
+        console.log(chalk.yellow('⚠️  Navigation timeout, checking if logged in anyway...'));
+      }
 
       await this.page.waitForTimeout(2000);
 
+      const currentUrl = this.page.url();
+      if (this.debugMode) {
+        console.log(chalk.gray(`Current URL after login: ${currentUrl}`));
+        const afterLoginScreenshot = path.join(this.downloadsDir, 'debug-after-login.png');
+        await this.page.screenshot({ path: afterLoginScreenshot });
+        console.log(chalk.gray(`📸 After login screenshot: ${afterLoginScreenshot}\n`));
+      }
+
       const loginSuccessful = await this.checkIfLoggedIn();
+      
       if (loginSuccessful) {
         console.log(chalk.green('✓ Login successful\n'));
+        
+        console.log(chalk.blue('📚 Navigating to library...'));
+        await this.page.goto(libraryUrl, { waitUntil: 'networkidle', timeout: 30000 });
+        await this.page.waitForTimeout(2000);
+        
         return true;
       } else {
-        console.log(chalk.red('✗ Login failed\n'));
+        console.log(chalk.red('✗ Login failed - still seeing login page\n'));
         return false;
       }
     } catch (error) {
@@ -103,22 +221,62 @@ class KajabiPDFDownloader {
   private async checkIfLoggedIn(): Promise<boolean> {
     if (!this.page) return false;
 
+    const currentUrl = this.page.url();
+    
+    if (currentUrl.includes('/login')) {
+      if (this.debugMode) {
+        console.log(chalk.gray('  Still on login page'));
+      }
+      return false;
+    }
+
     const loginIndicators = [
-      'input[type="email"]',
-      'input[name="email"]',
-      'button:has-text("Sign in")',
-      'button:has-text("Log in")',
+      'input[type="email"][name="email"]',
+      'input[type="password"][name="password"]',
+      'form[action*="login"]',
     ];
 
     for (const selector of loginIndicators) {
-      const loginElement = await this.page.$(selector);
-      if (loginElement) {
-        const isVisible = await loginElement.isVisible();
-        if (isVisible) return false;
+      try {
+        const element = await this.page.$(selector);
+        if (element && (await element.isVisible())) {
+          if (this.debugMode) {
+            console.log(chalk.gray(`  Found login indicator: ${selector}`));
+          }
+          return false;
+        }
+      } catch (error) {
       }
     }
 
-    return true;
+    const loggedInIndicators = [
+      'a[href*="logout"]',
+      'a[href*="sign_out"]',
+      'a[href*="signout"]',
+      'button:has-text("Log out")',
+      'button:has-text("Sign out")',
+      '[class*="user-menu"]',
+      '[class*="account-menu"]',
+      '[data-user]',
+    ];
+
+    for (const selector of loggedInIndicators) {
+      try {
+        const element = await this.page.$(selector);
+        if (element && (await element.isVisible())) {
+          if (this.debugMode) {
+            console.log(chalk.gray(`  Found logged-in indicator: ${selector}`));
+          }
+          return true;
+        }
+      } catch (error) {
+      }
+    }
+
+    if (this.debugMode) {
+      console.log(chalk.gray('  No clear indicators, assuming logged in based on URL'));
+    }
+    return !currentUrl.includes('/login');
   }
 
   async scanLibrary(): Promise<PDFLink[]> {
