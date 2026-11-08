@@ -6,10 +6,15 @@ Automated PDF downloader for Kajabi library sites using Playwright browser autom
 
 - 🔐 **Secure Authentication** - Prompts for credentials at runtime (not stored)
 - 🕷️ **Smart Crawling** - Systematically scans library modules for PDFs
+- 🎯 **Intelligent PDF Detection** - Finds PDFs via multiple patterns:
+  - Traditional `.pdf` extensions
+  - Kajabi `-pdf` URL endings
+  - `/downloads/` paths
+  - Embedded PDFs in iframes and objects
 - 📥 **Bulk Download** - Downloads all discovered PDFs with progress tracking
 - 🔄 **Retry Logic** - Automatic retry on failed downloads (up to 3 attempts)
 - 📊 **Progress Tracking** - Real-time status updates and final statistics
-- 🎯 **Organized Output** - Saves PDFs with descriptive, organized filenames
+- 📁 **Organized Output** - Saves PDFs with descriptive, organized filenames
 - ⚡ **Skip Existing** - Automatically skips already downloaded files
 
 ## Prerequisites
@@ -184,6 +189,12 @@ If no PDFs are discovered:
 1. Verify you have access to the library content
 2. Check if PDFs are behind additional authentication
 3. The site structure may have changed - check the module link selectors
+
+The app detects PDFs using multiple patterns:
+- URLs ending in `.pdf` (e.g., `document.pdf`)
+- Kajabi-style URLs ending in `-pdf` (e.g., `cookbook-pdf`)
+- URLs containing `/downloads/` in the path
+- Embedded PDFs in `<iframe>`, `<embed>`, or `<object>` tags
 
 ### Download Failures
 

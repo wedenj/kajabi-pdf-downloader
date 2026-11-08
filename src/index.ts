@@ -177,6 +177,21 @@ class KajabiPDFDownloader {
     return pdfLinks;
   }
 
+  private isPdfLink(url: string): boolean {
+    if (!url) return false;
+    
+    const lowerUrl = url.toLowerCase();
+    
+    return (
+      lowerUrl.includes('.pdf') ||
+      lowerUrl.endsWith('-pdf') ||
+      lowerUrl.includes('/downloads/') ||
+      /\/pdf[\/\?]/.test(lowerUrl) ||
+      lowerUrl.includes('pdf_download') ||
+      lowerUrl.includes('pdfdownload')
+    );
+  }
+
   private async findPDFsOnPage(moduleName: string): Promise<PDFLink[]> {
     if (!this.page) return [];
 
@@ -189,22 +204,24 @@ class KajabiPDFDownloader {
             href: a.href,
             text: a.textContent?.trim() || '',
           }))
-          .filter((link) => link.href.toLowerCase().includes('.pdf'))
+          .filter((link) => link.href)
       );
 
       for (const link of links) {
-        pdfLinks.push({
-          url: link.href,
-          title: link.text || 'Untitled',
-          moduleName,
-        });
+        if (this.isPdfLink(link.href)) {
+          pdfLinks.push({
+            url: link.href,
+            title: link.text || 'Untitled',
+            moduleName,
+          });
+        }
       }
 
       const iframes = await this.page.$$('iframe');
       for (const iframe of iframes) {
         try {
           const src = await iframe.getAttribute('src');
-          if (src && src.toLowerCase().includes('.pdf')) {
+          if (src && this.isPdfLink(src)) {
             pdfLinks.push({
               url: src,
               title: 'Embedded PDF',
@@ -221,7 +238,7 @@ class KajabiPDFDownloader {
           const src = await element.getAttribute('src');
           const data = await element.getAttribute('data');
           const url = src || data;
-          if (url && url.toLowerCase().includes('.pdf')) {
+          if (url && this.isPdfLink(url)) {
             pdfLinks.push({
               url,
               title: 'Embedded PDF Object',
