@@ -102,6 +102,8 @@ class KajabiPDFDownloader {
       console.log(chalk.blue('🔑 Looking for login form fields...'));
 
       const emailSelectors = [
+        '#member_email',
+        'input[name="member\\[email\\]"]',
         'input[type="email"]',
         'input[name="email"]',
         'input[id="email"]',
@@ -111,6 +113,8 @@ class KajabiPDFDownloader {
       ];
 
       const passwordSelectors = [
+        '#member_password',
+        'input[name="member\\[password\\]"]',
         'input[type="password"]',
         'input[name="password"]',
         'input[id="password"]',
@@ -216,24 +220,24 @@ class KajabiPDFDownloader {
 
       let submitButton = null;
       for (const selector of submitSelectors) {
-        const button = await this.page.$(selector);
-        if (button && (await button.isVisible())) {
-          submitButton = selector;
-          if (this.debugMode) {
-            console.log(chalk.gray(`  Found submit button: ${selector}`));
+        try {
+          const button = await this.page.$(selector);
+          if (button && (await button.isVisible())) {
+            submitButton = selector;
+            if (this.debugMode) {
+              console.log(chalk.gray(`  Found submit button: ${selector}`));
+            }
+            break;
           }
-          break;
+        } catch (error) {
         }
       }
 
-      if (!submitButton) {
-        console.log(chalk.yellow('⚠️  No submit button found, trying form submit...'));
-        await this.page.evaluate(() => {
-          const form = document.querySelector('form');
-          if (form) form.submit();
-        });
-      } else {
+      if (submitButton) {
         await this.page.click(submitButton);
+      } else {
+        console.log(chalk.yellow('⚠️  No submit button found, pressing Enter on password field...'));
+        await this.page.press(passwordInput, 'Enter');
       }
 
       console.log(chalk.gray('Waiting for navigation after login...'));
