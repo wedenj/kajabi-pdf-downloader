@@ -29,6 +29,7 @@ class KajabiPDFDownloader {
   private downloadsDir: string;
   private debugMode: boolean;
   private maxDepth: number;
+  private forceDownload: boolean;
   private stats: DownloadStats = {
     total: 0,
     successful: 0,
@@ -36,10 +37,11 @@ class KajabiPDFDownloader {
     skipped: 0,
   };
 
-  constructor(downloadsDir: string = './downloads', debugMode: boolean = false, maxDepth: number = 3) {
+  constructor(downloadsDir: string = './downloads', debugMode: boolean = false, maxDepth: number = 3, forceDownload: boolean = false) {
     this.downloadsDir = path.resolve(downloadsDir);
     this.debugMode = debugMode;
     this.maxDepth = maxDepth;
+    this.forceDownload = forceDownload;
   }
 
   async initialize(): Promise<void> {
@@ -677,21 +679,24 @@ class KajabiPDFDownloader {
       const progress = `[${i + 1}/${pdfLinks.length}]`;
 
       try {
-        console.log(chalk.cyan(`${progress} Downloading: ${pdf.title} (${pdf.moduleName})`));
+        console.log(chalk.cyan(`${progress} ${pdf.title} (${pdf.moduleName})`));
 
         const sanitizedModule = this.sanitizeFilename(pdf.moduleName);
         const sanitizedTitle = this.sanitizeFilename(pdf.title);
         const filename = `${sanitizedModule}_${sanitizedTitle}.pdf`;
         const filepath = path.join(this.downloadsDir, filename);
 
-        try {
-          await fs.access(filepath);
-          console.log(chalk.gray(`  ⊘ Skipped (already exists)`));
-          this.stats.skipped++;
-          continue;
-        } catch {
+        if (!this.forceDownload) {
+          try {
+            await fs.access(filepath);
+            console.log(chalk.gray(`  ⏭️  Already downloaded, skipping`));
+            this.stats.skipped++;
+            continue;
+          } catch {
+          }
         }
 
+        console.log(chalk.gray(`  📥 Downloading...`));
         const downloaded = await this.downloadWithRetry(pdf.url, filepath);
 
         if (downloaded) {
@@ -748,11 +753,16 @@ class KajabiPDFDownloader {
     console.log(chalk.blue('\n' + '='.repeat(50)));
     console.log(chalk.bold('📊 Download Statistics:'));
     console.log(chalk.blue('='.repeat(50)));
-    console.log(chalk.white(`Total PDFs found:     ${this.stats.total}`));
-    console.log(chalk.green(`Successfully downloaded: ${this.stats.successful}`));
-    console.log(chalk.gray(`Skipped (existing):   ${this.stats.skipped}`));
-    console.log(chalk.red(`Failed:               ${this.stats.failed}`));
-    console.log(chalk.blue('='.repeat(50) + '\n'));
+    console.log(chalk.white(`Total PDFs found:        ${this.stats.total}`));
+    console.log(chalk.green(`Downloaded (new):        ${this.stats.successful}`));
+    console.log(chalk.gray(`Skipped (already exist): ${this.stats.skipped}`));
+    console.log(chalk.red(`Failed:                  ${this.stats.failed}`));
+    console.log(chalk.blue('='.repeat(50)));
+    
+    if (this.stats.skipped > 0 && !this.forceDownload) {
+      console.log(chalk.gray('\n💡 Tip: Use --force to re-download existing files'));
+    }
+    console.log('');
   }
 
   async cleanup(): Promise<void> {
@@ -769,6 +779,7 @@ async function main() {
   console.log(chalk.bold.blue('╚════════════════════════════════════════╝\n'));
 
   const debugMode = process.argv.includes('--debug');
+  const forceDownload = process.argv.includes('--force');
   
   let maxDepth = 3;
   const maxDepthIndex = process.argv.indexOf('--max-depth');
@@ -785,7 +796,11 @@ async function main() {
   if (debugMode) {
     console.log(chalk.yellow('  🐛 Debug mode: enabled'));
   }
-  console.log(chalk.gray(`  📊 Max scan depth: ${maxDepth} levels\n`));
+  console.log(chalk.gray(`  📊 Max scan depth: ${maxDepth} levels`));
+  if (forceDownload) {
+    console.log(chalk.yellow('  🔄 Force download: enabled (will re-download existing files)'));
+  }
+  console.log('');
 
   const response = await prompts([
     {
@@ -820,7 +835,7 @@ async function main() {
     process.exit(0);
   }
 
-  const downloader = new KajabiPDFDownloader(response.downloadsDir, debugMode, maxDepth);
+  const downloader = new KajabiPDFDownloader(response.downloadsDir, debugMode, maxDepth, forceDownload);
 
   try {
     await downloader.initialize();

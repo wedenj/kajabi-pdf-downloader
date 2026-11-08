@@ -88,6 +88,24 @@ npm run dev -- --debug --max-depth 4
 
 If the scanner reports "X more links found at max depth", try increasing `--max-depth` to scan deeper.
 
+**Force Download (`--force`)**
+
+Re-download all PDFs, even if they already exist:
+
+```bash
+# Re-download everything
+npm run dev -- --force
+
+# Re-run with higher depth, only download new PDFs
+npm run dev -- --max-depth 5
+# (skips existing files automatically)
+
+# Force re-download with higher depth
+npm run dev -- --max-depth 5 --force
+```
+
+By default, the app skips files that already exist in the downloads folder. This lets you safely re-run with different depths without re-downloading everything.
+
 ### Interactive Prompts
 
 When you run the application, you'll be prompted for:
