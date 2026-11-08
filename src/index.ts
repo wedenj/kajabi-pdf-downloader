@@ -450,23 +450,43 @@ class KajabiPDFDownloader {
       for (const link of moduleLinks) {
         try {
           moduleCount++;
-          console.log(chalk.gray(`[${moduleCount}/${moduleLinks.length}] Checking: ${link.text}`));
+          console.log(chalk.cyan(`\n[${moduleCount}/${moduleLinks.length}] ${link.text}`));
+          console.log(chalk.gray(`  URL: ${link.url}`));
+          console.log(chalk.gray(`  Navigating...`));
 
           await this.page.goto(link.url, { waitUntil: 'networkidle', timeout: 30000 });
           await this.page.waitForTimeout(2000);
 
-          const pagePDFs = await this.findPDFsOnPage(link.text);
+          if (this.debugMode) {
+            const moduleScreenshot = path.join(this.downloadsDir, `debug-module-${moduleCount}.png`);
+            await this.page.screenshot({ path: moduleScreenshot });
+            console.log(chalk.gray(`  📸 Screenshot: ${moduleScreenshot}`));
+          }
+
+          console.log(chalk.gray(`  Looking for PDFs on this page...`));
+
+          const pagePDFs = await this.findPDFsOnPage(link.text, moduleCount);
           pdfLinks.push(...pagePDFs);
 
           if (pagePDFs.length > 0) {
             console.log(chalk.green(`  ✓ Found ${pagePDFs.length} PDF(s)`));
+            pagePDFs.forEach((pdf, i) => {
+              console.log(chalk.green(`    ${i + 1}. ${pdf.title}`));
+              if (this.debugMode) {
+                console.log(chalk.gray(`       ${pdf.url}`));
+              }
+            });
+          } else {
+            console.log(chalk.yellow(`  ✗ No PDFs found on this page`));
           }
         } catch (error) {
-          console.log(chalk.yellow(`  ⚠ Error scanning ${link.text}: ${error}`));
+          console.log(chalk.red(`  ✗ Error: ${error}`));
         }
       }
 
-      console.log(chalk.green(`\n✓ Scan complete: Found ${pdfLinks.length} PDFs\n`));
+      console.log(chalk.green(`\n${'='.repeat(60)}`));
+      console.log(chalk.green(`✓ Scan complete: Visited ${moduleCount} pages, found ${pdfLinks.length} PDFs`));
+      console.log(chalk.green('='.repeat(60) + '\n'));
     } catch (error) {
       console.error(chalk.red(`Error during library scan: ${error}`));
     }
@@ -533,7 +553,7 @@ class KajabiPDFDownloader {
     );
   }
 
-  private async findPDFsOnPage(moduleName: string): Promise<PDFLink[]> {
+  private async findPDFsOnPage(moduleName: string, moduleIndex?: number): Promise<PDFLink[]> {
     if (!this.page) return [];
 
     const pdfLinks: PDFLink[] = [];
@@ -548,52 +568,99 @@ class KajabiPDFDownloader {
           .filter((link) => link.href)
       );
 
+      console.log(chalk.gray(`  Found ${links.length} total links on page`));
+
+      if (this.debugMode && links.length > 0) {
+        console.log(chalk.gray(`  Sample links (first 10):`));
+        links.slice(0, 10).forEach((link, i) => {
+          const truncated = link.href.length > 80 ? link.href.substring(0, 77) + '...' : link.href;
+          console.log(chalk.gray(`    ${i + 1}. ${truncated}`));
+        });
+      }
+
+      let pdfLinkCount = 0;
       for (const link of links) {
         if (this.isPdfLink(link.href)) {
+          pdfLinkCount++;
+          const detectionMethod = this.getPdfDetectionMethod(link.href);
+          
           pdfLinks.push({
             url: link.href,
             title: link.text || 'Untitled',
             moduleName,
           });
+
+          if (this.debugMode) {
+            console.log(chalk.green(`  PDF detected via ${detectionMethod}: ${link.href}`));
+          }
         }
       }
 
+      console.log(chalk.gray(`  Links matching PDF patterns: ${pdfLinkCount}`));
+
       const iframes = await this.page.$$('iframe');
+      if (iframes.length > 0) {
+        console.log(chalk.gray(`  Checking ${iframes.length} iframe(s)...`));
+      }
+
       for (const iframe of iframes) {
         try {
           const src = await iframe.getAttribute('src');
           if (src && this.isPdfLink(src)) {
+            const detectionMethod = this.getPdfDetectionMethod(src);
             pdfLinks.push({
               url: src,
               title: 'Embedded PDF',
               moduleName,
             });
+            if (this.debugMode) {
+              console.log(chalk.green(`  PDF detected in iframe via ${detectionMethod}: ${src}`));
+            }
           }
         } catch (error) {
         }
       }
 
       const embedElements = await this.page.$$('embed[type="application/pdf"], object[type="application/pdf"]');
+      if (embedElements.length > 0) {
+        console.log(chalk.gray(`  Checking ${embedElements.length} embed/object element(s)...`));
+      }
+
       for (const element of embedElements) {
         try {
           const src = await element.getAttribute('src');
           const data = await element.getAttribute('data');
           const url = src || data;
           if (url && this.isPdfLink(url)) {
+            const detectionMethod = this.getPdfDetectionMethod(url);
             pdfLinks.push({
               url,
               title: 'Embedded PDF Object',
               moduleName,
             });
+            if (this.debugMode) {
+              console.log(chalk.green(`  PDF detected in embed via ${detectionMethod}: ${url}`));
+            }
           }
         } catch (error) {
         }
       }
     } catch (error) {
-      console.error(chalk.yellow(`Error finding PDFs on page: ${error}`));
+      console.error(chalk.yellow(`  Error finding PDFs on page: ${error}`));
     }
 
     return pdfLinks;
+  }
+
+  private getPdfDetectionMethod(url: string): string {
+    const lowerUrl = url.toLowerCase();
+    if (lowerUrl.includes('.pdf')) return '.pdf extension';
+    if (lowerUrl.endsWith('-pdf')) return '-pdf ending';
+    if (lowerUrl.includes('/downloads/')) return '/downloads/ path';
+    if (/\/pdf[\/\?]/.test(lowerUrl)) return '/pdf/ directory';
+    if (lowerUrl.includes('pdf_download')) return 'pdf_download pattern';
+    if (lowerUrl.includes('pdfdownload')) return 'pdfdownload pattern';
+    return 'unknown';
   }
 
   async downloadPDFs(pdfLinks: PDFLink[]): Promise<void> {
