@@ -243,12 +243,13 @@ class KajabiPDFDownloader {
       console.log(chalk.gray('Waiting for navigation after login...'));
       
       try {
-        await this.page.waitForNavigation({ waitUntil: 'networkidle', timeout: 30000 });
+        await this.page.waitForURL(/\/(library|dashboard|products|home)/, { timeout: 10000 });
+        console.log(chalk.gray('✓ Navigation detected'));
       } catch (error) {
-        console.log(chalk.yellow('⚠️  Navigation timeout, checking if logged in anyway...'));
+        console.log(chalk.yellow('⚠️  Navigation timeout, checking current URL...'));
       }
 
-      await this.page.waitForTimeout(2000);
+      await this.page.waitForTimeout(1000);
 
       const currentUrl = this.page.url();
       if (this.debugMode) {
@@ -368,7 +369,6 @@ class KajabiPDFDownloader {
       }
 
       const currentUrl = this.page.url();
-      visitedUrls.add(currentUrl);
 
       let currentDepth = 0;
       let currentLevel = [currentUrl];
@@ -396,7 +396,6 @@ class KajabiPDFDownloader {
 
             await this.page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
             await this.page.waitForTimeout(2000);
-            visitedUrls.add(url);
 
             if (this.debugMode) {
               const screenshot = path.join(this.downloadsDir, `debug-depth${currentDepth + 1}-page${i + 1}.png`);
@@ -409,6 +408,8 @@ class KajabiPDFDownloader {
             
             const newLinks = contentLinks.filter((link) => !visitedUrls.has(link));
             console.log(chalk.gray(`  Found ${contentLinks.length} content links (${newLinks.length} new)`));
+            
+            visitedUrls.add(url);
 
             if (newLinks.length > 0 && this.debugMode) {
               console.log(chalk.gray(`  New links to visit:`));
