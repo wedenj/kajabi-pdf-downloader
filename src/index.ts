@@ -459,16 +459,27 @@ class KajabiPDFDownloader {
               console.log(chalk.gray(`  📸 Screenshot: ${screenshot}`));
             }
 
-            console.log(chalk.gray(`  Scanning for content links...`));
-            const contentLinks = await this.discoverContentLinks();
+            console.log(chalk.gray(`  Scanning for links...`));
+            const discovered = await this.discoverContentLinks();
             
-            const newLinks = contentLinks.filter((link) => !visitedUrls.has(link));
-            console.log(chalk.gray(`  Found ${contentLinks.length} content links (${newLinks.length} new)`));
+            const newLinks = discovered.contentLinks.filter((link) => !visitedUrls.has(link));
+            console.log(chalk.gray(`  Found ${discovered.contentLinks.length} content links (${newLinks.length} new)`));
+            
+            if (discovered.directPdfs.length > 0) {
+              console.log(chalk.green(`  📄 Found ${discovered.directPdfs.length} direct download link(s)`));
+              pdfLinks.push(...discovered.directPdfs);
+              discovered.directPdfs.forEach((pdf, idx) => {
+                console.log(chalk.green(`    ${idx + 1}. ${pdf.title}`));
+                if (this.debugMode) {
+                  console.log(chalk.gray(`       ${pdf.url}`));
+                }
+              });
+            }
             
             visitedUrls.add(url);
 
             if (newLinks.length > 0 && this.debugMode) {
-              console.log(chalk.gray(`  New links to visit:`));
+              console.log(chalk.gray(`  New content pages to visit:`));
               newLinks.slice(0, 5).forEach((link, idx) => {
                 const truncated = link.length > 80 ? link.substring(0, 77) + '...' : link;
                 console.log(chalk.gray(`    ${idx + 1}. ${truncated}`));
@@ -480,12 +491,12 @@ class KajabiPDFDownloader {
 
             nextLevel.push(...newLinks);
 
-            console.log(chalk.gray(`  Checking for PDFs on this page...`));
+            console.log(chalk.gray(`  Checking for embedded PDFs on this page...`));
             const pagePDFs = await this.findPDFsOnPage(`Level ${currentDepth + 1} Page ${i + 1}`, i + 1);
 
             if (pagePDFs.length > 0) {
               pdfLinks.push(...pagePDFs);
-              console.log(chalk.green(`  ✓ Found ${pagePDFs.length} PDF(s)!`));
+              console.log(chalk.green(`  ✓ Found ${pagePDFs.length} embedded PDF(s)!`));
               pagePDFs.forEach((pdf, idx) => {
                 console.log(chalk.green(`    ${idx + 1}. ${pdf.title}`));
                 if (this.debugMode) {
@@ -493,7 +504,7 @@ class KajabiPDFDownloader {
                 }
               });
             } else {
-              console.log(chalk.gray(`  No PDFs on this page`));
+              console.log(chalk.gray(`  No embedded PDFs on this page`));
             }
           } catch (error) {
             console.log(chalk.red(`  ✗ Error: ${error}`));
@@ -530,33 +541,49 @@ class KajabiPDFDownloader {
     return pdfLinks;
   }
 
-  private async discoverContentLinks(): Promise<string[]> {
-    if (!this.page) return [];
+  private async discoverContentLinks(): Promise<{ contentLinks: string[]; directPdfs: PDFLink[] }> {
+    if (!this.page) return { contentLinks: [], directPdfs: [] };
 
     try {
       const links = await this.page.$$eval('a[href]', (anchors) =>
         anchors
-          .map((a) => (a as HTMLAnchorElement).href)
-          .filter((href) => href && href.startsWith('http'))
+          .map((a) => ({
+            href: (a as HTMLAnchorElement).href,
+            text: a.textContent?.trim() || '',
+          }))
+          .filter((link) => link.href && link.href.startsWith('http'))
       );
 
       const contentLinks: string[] = [];
+      const directPdfs: PDFLink[] = [];
       let externalLinksSkipped = 0;
 
       for (const link of links) {
         try {
-          const url = new URL(link);
+          const url = new URL(link.href);
           
           if (url.hostname !== this.baseDomain) {
             externalLinksSkipped++;
             if (this.debugMode && externalLinksSkipped <= 5) {
-              console.log(chalk.gray(`  ⏭️  Skipping external link: ${link}`));
+              console.log(chalk.gray(`  ⏭️  Skipping external link: ${link.href}`));
             }
             continue;
           }
 
-          if (this.looksLikeContentLink(link)) {
-            contentLinks.push(link);
+          if (this.isPdfLink(link.href)) {
+            directPdfs.push({
+              url: link.href,
+              title: link.text || 'Untitled PDF',
+              moduleName: 'Direct Download',
+            });
+            if (this.debugMode) {
+              console.log(chalk.green(`  📄 Direct PDF found: ${link.text || link.href}`));
+            }
+            continue;
+          }
+
+          if (this.looksLikeContentLink(link.href)) {
+            contentLinks.push(link.href);
           }
         } catch (error) {
           // Invalid URL, skip
@@ -567,10 +594,13 @@ class KajabiPDFDownloader {
         console.log(chalk.gray(`  ⏭️  Total external links skipped: ${externalLinksSkipped}`));
       }
 
-      return [...new Set(contentLinks)];
+      return {
+        contentLinks: [...new Set(contentLinks)],
+        directPdfs,
+      };
     } catch (error) {
       console.error(chalk.yellow(`Error discovering content links: ${error}`));
-      return [];
+      return { contentLinks: [], directPdfs: [] };
     }
   }
 
